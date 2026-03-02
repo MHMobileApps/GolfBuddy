@@ -71,3 +71,31 @@ npm run test
 3. Deploy.
 4. Ensure Supabase redirect URLs include your Vercel domain callback path.
 
+
+## GolfCourseAPI connectivity harness
+
+Use this harness to verify your key/header format and GolfCourseAPI endpoint/query params are correct:
+
+```bash
+GOLFCOURSE_API_KEY=your_key_here npm run test:golfapi
+```
+
+Example output:
+
+```text
+GolfCourseAPI test harness
+API key present: true
+API key prefix: abcd***
+
+URL: https://api.golfcourseapi.com/v1/search?search_query=St%20Andrews
+HTTP status: 200
+Search returned 8 course(s).
+First 2 results:
+1. id=12345 | club_name=St Andrews Links | course_name=Old Course | city=St Andrews | country=Scotland
+2. id=67890 | club_name=... | course_name=... | city=... | country=...
+
+URL: https://api.golfcourseapi.com/v1/courses/12345
+HTTP status: 200
+Course detail tee sets: 6
+Course detail holes count (first tee): 18
+```
