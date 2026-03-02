@@ -74,28 +74,33 @@ npm run test
 
 ## GolfCourseAPI connectivity harness
 
-Use this harness to verify your key/header format and GolfCourseAPI endpoint/query params are correct:
+Use this harness to verify your key/header format and GolfCourseAPI endpoint/query params are correct. It supports:
+
+- direct GolfCourseAPI course/club name search (`/v1/search?search_query=`)
+- city/postcode lookup via OpenStreetMap (Nominatim geocoding + Overpass nearby golf courses), then mapping nearby OSM names to GolfCourseAPI IDs for scorecard detail checks
 
 ```bash
 GOLFCOURSE_API_KEY=your_key_here npm run test:golfapi
 ```
 
-Example output:
+Examples:
 
-```text
-GolfCourseAPI test harness
-API key present: true
-API key prefix: abcd***
-
-URL: https://api.golfcourseapi.com/v1/search?search_query=St%20Andrews
-HTTP status: 200
-Search returned 8 course(s).
-First 2 results:
-1. id=12345 | club_name=St Andrews Links | course_name=Old Course | city=St Andrews | country=Scotland
-2. id=67890 | club_name=... | course_name=... | city=... | country=...
-
-URL: https://api.golfcourseapi.com/v1/courses/12345
-HTTP status: 200
-Course detail tee sets: 6
-Course detail holes count (first tee): 18
+```bash
+GOLFCOURSE_API_KEY=your_key_here node scripts/test-golfcourseapi.mjs "St Andrews"
+GOLFCOURSE_API_KEY=your_key_here node scripts/test-golfcourseapi.mjs "Harrogate"
+GOLFCOURSE_API_KEY=your_key_here node scripts/test-golfcourseapi.mjs "LS17 8BA"
 ```
+
+Optional radius override for nearby OSM discovery:
+
+```bash
+GOLFAPI_NEARBY_RADIUS_METERS=10000 GOLFCOURSE_API_KEY=your_key_here npm run test:golfapi -- "Leeds"
+# or
+GOLFCOURSE_API_KEY=your_key_here node scripts/test-golfcourseapi.mjs --radius-m 10000 "Leeds"
+```
+
+Notes:
+
+- OSM APIs can rate-limit, so keep runs reasonable and avoid tight loops.
+- The harness currently maps only the first 10 nearby OSM candidates to GolfCourseAPI to reduce external API load.
+- Ensure the GolfCourseAPI auth header format stays exactly `Authorization: Key <API_KEY>`.
