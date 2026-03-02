@@ -100,7 +100,7 @@ function normalizeCoursesResponse(data: unknown) {
 
 export const golfCourseApi = {
   search: async (q: string) => {
-    const data = await fetchApi(`/courses?search=${encodeURIComponent(q)}`, { cache: false });
+    const data = await fetchApi(`/search?search_query=${encodeURIComponent(q)}`, { cache: false });
     return normalizeCoursesResponse(data);
   },
   nearby: async (lat: number, lng: number, radiusKm = 30) => {

@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:golfapi": "node scripts/test-golfcourseapi.mjs"
   },
   "dependencies": {
     "@radix-ui/react-label": "^2.1.0",
