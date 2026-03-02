@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-masters-cream text-slate-900;
+}
+
+.card {
+  @apply rounded-2xl bg-white shadow-soft;
+}
