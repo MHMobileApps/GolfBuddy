@@ -5,9 +5,7 @@ const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 const DEFAULT_QUERY = 'St Andrews';
 const DEFAULT_RADIUS_METERS = Number(process.env.GOLFAPI_NEARBY_RADIUS_METERS || 25_000);
 const MAX_OSM_CANDIDATES = 10;
-const USER_AGENT =
-  process.env.OSM_USER_AGENT ||
-  'GolfBuddy/0.1 (GolfCourseAPI harness; contact: local-dev@golfbuddy.example)';
+const NOMINATIM_USER_AGENT = 'GolfBuddyTestHarness/1.0 (contact: local)';
 
 function safePreview(value, max = 500) {
   return String(value ?? '').slice(0, max);
@@ -200,7 +198,7 @@ async function geocodeWithNominatim(query) {
     url,
     sourceName: 'Nominatim geocode',
     headers: {
-      'User-Agent': USER_AGENT,
+      'User-Agent': NOMINATIM_USER_AGENT,
       Accept: 'application/json'
     }
   });
@@ -225,7 +223,7 @@ async function nearbyGolfCoursesFromOverpass(lat, lon, radiusMeters) {
     method: 'POST',
     sourceName: 'Overpass nearby',
     headers: {
-      'User-Agent': USER_AGENT,
+      'User-Agent': NOMINATIM_USER_AGENT,
       'Content-Type': 'text/plain',
       Accept: 'application/json'
     },
@@ -261,8 +259,22 @@ function bestCourseMatchesForOsm(osmCourse, courses, topN = 3) {
     .slice(0, topN);
 }
 
+function detailHasPlayableData(detail) {
+  const teeBoxes = Array.isArray(detail?.tee_boxes) ? detail.tee_boxes : [];
+  const counts = countTeeTypes(teeBoxes);
+  const holesCount = Array.isArray(detail?.holes) ? detail.holes.length : 0;
+
+  return {
+    teeBoxes,
+    counts,
+    holesCount,
+    valid: counts.male + counts.female > 0 && holesCount > 0
+  };
+}
+
 async function runDirectNameSearch(query) {
-  console.log(`\nUsing direct GolfCourseAPI name search for query: "${query}"`);
+  console.log('\n=== Direct name search ===');
+  console.log(`Query: "${query}"`);
   const search = await golfApiSearch(query);
   const courses = Array.isArray(search?.courses) ? search.courses : [];
 
@@ -270,40 +282,53 @@ async function runDirectNameSearch(query) {
   courses.slice(0, 10).forEach((course, index) => printCourseSummary(course, index));
 
   if (!courses.length) {
-    console.log('No results found.');
-    return;
+    console.log('No results found in direct name search.');
+    return null;
   }
 
   const picked = await pickFirstCourseWithTees(courses);
   if (!picked) {
     console.log('No courses with populated tees found in first 10 search results.');
-    return;
+    return null;
   }
 
-  const maleHoles = firstTeeHolesByGender(picked.teeBoxes, 'm');
-  const femaleHoles = firstTeeHolesByGender(picked.teeBoxes, 'f');
+  const playable = detailHasPlayableData(picked.detail);
+  if (!playable.valid) {
+    console.log('Direct search found courses, but none with both tees and holes in first 10 details.');
+    return null;
+  }
 
-  console.log(`\nSelected course id=${picked.course.id}`);
-  console.log(`Tee sets: total=${picked.teeBoxes.length}, male=${picked.counts.male}, female=${picked.counts.female}`);
-  console.log(`Holes in first male tee: ${maleHoles}`);
-  console.log(`Holes in first female tee: ${femaleHoles}`);
+  console.log('\nWinner from direct search:');
+  console.log(`id=${picked.course.id}`);
+  console.log(`club_name=${picked.course?.club_name ?? 'n/a'}`);
+  console.log(`course_name=${picked.course?.course_name ?? 'n/a'}`);
+  console.log(`male tees=${playable.counts.male}`);
+  console.log(`female tees=${playable.counts.female}`);
+  console.log(`holes count=${playable.holesCount}`);
+  return {
+    course: picked.course,
+    detail: picked.detail,
+    counts: playable.counts,
+    holesCount: playable.holesCount
+  };
 }
 
 async function runNearbyLookup(query, radiusMeters) {
-  console.log(`\nUsing place/postcode flow for query: "${query}"`);
+  console.log('\n=== Fallback: geocode ===');
   const geocode = await geocodeWithNominatim(query);
   if (!geocode) {
-    console.log('Could not geocode the query; aborting nearby lookup.');
-    return;
+    console.error('Fallback failed: geocode returned no results.');
+    return null;
   }
 
   console.log(`Geocoded to lat=${geocode.lat}, lon=${geocode.lon} (${geocode.displayName})`);
 
+  console.log('\n=== Fallback: nearby courses ===');
   const nearby = await nearbyGolfCoursesFromOverpass(geocode.lat, geocode.lon, radiusMeters);
 
   if (!nearby.length) {
     console.log('No nearby OSM golf courses found.');
-    return;
+    return null;
   }
 
   const deduped = Array.from(new Map(nearby.map((item) => [normalizeName(item.name), item])).values());
@@ -314,12 +339,14 @@ async function runNearbyLookup(query, radiusMeters) {
     }))
     .sort((a, b) => a.distanceMeters - b.distanceMeters);
 
-  console.log(`Found ${withDistance.length} nearby OSM golf course candidate(s):`);
-  withDistance.forEach((item, idx) => {
+  const nearbyTop = withDistance.slice(0, MAX_OSM_CANDIDATES);
+  console.log(`Found ${withDistance.length} nearby OSM golf course candidate(s). Showing first ${nearbyTop.length}:`);
+  nearbyTop.forEach((item, idx) => {
     console.log(`${idx + 1}. ${item.name} (${(item.distanceMeters / 1000).toFixed(2)} km)`);
   });
 
-  for (const osmCourse of withDistance.slice(0, MAX_OSM_CANDIDATES)) {
+  console.log('\n=== Fallback: mapping to GolfCourseAPI ===');
+  for (const osmCourse of nearbyTop) {
     console.log(`\nMapping OSM course: ${osmCourse.name}`);
     const search = await golfApiSearch(osmCourse.name);
     const courses = Array.isArray(search?.courses) ? search.courses : [];
@@ -329,43 +356,47 @@ async function runNearbyLookup(query, radiusMeters) {
       continue;
     }
 
-    const topMatches = bestCourseMatchesForOsm(osmCourse, courses, 3);
-    if (!topMatches.length) {
+    const bestMatch = bestCourseMatchesForOsm(osmCourse, courses, 1)[0];
+    if (!bestMatch) {
       console.log('No GolfCourseAPI match found.');
       continue;
     }
 
-    let foundWithTees = false;
-    for (const [matchIdx, match] of topMatches.entries()) {
-      console.log(
-        `Candidate ${matchIdx + 1}: id=${match.course?.id} | club=${match.course?.club_name ?? 'n/a'} | course=${match.course?.course_name ?? 'n/a'} | distance=${Number.isFinite(match.distance) ? `${(match.distance / 1000).toFixed(2)} km` : 'unknown'} | nameScore=${match.nameScore.toFixed(2)}`
-      );
+    console.log(
+      `Best candidate: id=${bestMatch.course?.id} | club=${bestMatch.course?.club_name ?? 'n/a'} | course=${bestMatch.course?.course_name ?? 'n/a'} | distance=${Number.isFinite(bestMatch.distance) ? `${(bestMatch.distance / 1000).toFixed(2)} km` : 'unknown'} | nameScore=${bestMatch.nameScore.toFixed(2)}`
+    );
 
-      if (!match.course?.id) continue;
-      const detail = await golfApiCourseDetail(match.course.id);
-      if (!detail) continue;
-
-      const teeBoxes = Array.isArray(detail?.tee_boxes) ? detail.tee_boxes : [];
-      if (!teeBoxes.length) {
-        continue;
-      }
-
-      const counts = countTeeTypes(teeBoxes);
-      const maleHoles = firstTeeHolesByGender(teeBoxes, 'm');
-      const femaleHoles = firstTeeHolesByGender(teeBoxes, 'f');
-
-      console.log(`Selected GolfCourseAPI id=${match.course.id} for OSM "${osmCourse.name}"`);
-      console.log(`Tee sets: total=${teeBoxes.length}, male=${counts.male}, female=${counts.female}`);
-      console.log(`Holes in first male tee: ${maleHoles}`);
-      console.log(`Holes in first female tee: ${femaleHoles}`);
-      foundWithTees = true;
-      break;
+    if (!bestMatch.course?.id) {
+      continue;
     }
 
-    if (!foundWithTees) {
-      console.log('No GolfCourseAPI match found with populated tees.');
+    const detail = await golfApiCourseDetail(bestMatch.course.id);
+    if (!detail) {
+      continue;
     }
+
+    const playable = detailHasPlayableData(detail);
+    if (!playable.valid) {
+      console.log('Candidate does not have both tees and holes data.');
+      continue;
+    }
+
+    console.log('\nWinner from fallback mapping:');
+    console.log(`id=${bestMatch.course.id}`);
+    console.log(`club_name=${bestMatch.course?.club_name ?? 'n/a'}`);
+    console.log(`course_name=${bestMatch.course?.course_name ?? 'n/a'}`);
+    console.log(`male tees=${playable.counts.male}`);
+    console.log(`female tees=${playable.counts.female}`);
+    console.log(`holes count=${playable.holesCount}`);
+    return {
+      course: bestMatch.course,
+      detail,
+      counts: playable.counts,
+      holesCount: playable.holesCount
+    };
   }
+
+  return null;
 }
 
 function parseArgs(argv) {
@@ -393,22 +424,26 @@ function parseArgs(argv) {
 async function main() {
   const { query, radiusMeters } = parseArgs(process.argv);
   console.log('GolfCourseAPI + OSM test harness');
-  console.log(`API key present: ${Boolean(API_KEY)}`);
 
   if (!API_KEY) {
     console.error('Missing GOLFCOURSE_API_KEY');
     process.exit(1);
   }
 
+  const preview = `${String(API_KEY).slice(0, 4)}***`;
+  console.log(`API key: ${preview}`);
+
   console.log(`Query: "${query}"`);
   console.log(`Nearby radius: ${radiusMeters} meters`);
 
-  if (looksLikePlaceQuery(query)) {
-    await runNearbyLookup(query, radiusMeters);
-    return;
+  const direct = await runDirectNameSearch(query);
+  if (direct) {
+    process.exit(0);
   }
 
-  await runDirectNameSearch(query);
+  console.log('\nDirect name search did not find a playable course. Triggering fallback flow.');
+  const fallback = await runNearbyLookup(query, radiusMeters);
+  process.exit(fallback ? 0 : 1);
 }
 
 main().catch((error) => {
